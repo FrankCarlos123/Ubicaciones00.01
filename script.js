@@ -86,6 +86,7 @@ async function processImage(canvas) {
         const formData = new FormData();
         formData.append('image', blob);
         
+        console.log("Subiendo imagen...");
         const uploadResponse = await fetch('https://api.imgbb.com/1/upload?key=52caeb3987a1d3e1407627928b18c14e', {
             method: 'POST',
             body: formData
@@ -97,8 +98,9 @@ async function processImage(canvas) {
         }
 
         const imageUrl = uploadResult.data.url;
-        const ocrUrl = `https://api.ocr.space/parse/imageurl?apikey=helloworld&url=${encodeURIComponent(imageUrl)}&OCREngine=2`;
+        console.log("Imagen subida, procesando OCR...");
         
+        const ocrUrl = `https://api.ocr.space/parse/imageurl?apikey=helloworld&url=${encodeURIComponent(imageUrl)}&OCREngine=2`;
         const ocrResponse = await fetch(ocrUrl);
         const ocrResult = await ocrResponse.json();
         
@@ -107,12 +109,15 @@ async function processImage(canvas) {
         }
 
         const text = ocrResult.ParsedResults[0].ParsedText;
+        console.log("Texto extraído:", text);
 
-        // Prompt para Gemini
+        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyCa362tZsWj38073XyGaMTmKC0YKc-W0I8`;
+        
         const prompt = {
             "contents": [{
                 "parts": [{
-                    "text": `Analiza el siguiente horario y extrae las horas trabajadas. El formato es dd Mes HH:mm-HH:mm. Por favor, devuelve un JSON con el siguiente formato:
+                    "text": `Analiza el siguiente horario y extrae las horas trabajadas. El formato es dd Mes HH:mm-HH:mm. 
+                    Devuelve solo un JSON con este formato exacto:
                     {
                         "shifts": [
                             {
@@ -122,13 +127,12 @@ async function processImage(canvas) {
                             }
                         ]
                     }
-                    Solo incluye los turnos válidos. El texto es:\n\n${text}`
+                    El texto a analizar es:\n${text}`
                 }]
             }]
         };
 
-        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyCa362tZsWj38073XyGaMTmKC0YKc-W0I8`;
-        
+        console.log("Enviando a Gemini...");
         const geminiResponse = await fetch(GEMINI_URL, {
             method: 'POST',
             headers: {
@@ -138,6 +142,7 @@ async function processImage(canvas) {
         });
 
         const geminiResult = await geminiResponse.json();
+        console.log("Respuesta de Gemini:", geminiResult);
         
         if (geminiResult.candidates && geminiResult.candidates[0]) {
             const shiftsData = JSON.parse(geminiResult.candidates[0].content.parts[0].text);
@@ -153,12 +158,15 @@ async function processImage(canvas) {
         showLoading(false);
     }
 }
+
 function calculateHours(shifts) {
     let diurnalHours = 0;
     let nightHours = 0;
     let sundayHours = 0;
     let holidayHours = 0;
     
+    console.log("Calculando horas para turnos:", shifts);
+
     shifts.forEach(shift => {
         const date = new Date(shift.date);
         const [startHour, startMinute] = shift.start.split(':').map(Number);
@@ -207,6 +215,13 @@ function calculateHours(shifts) {
         }
     });
     
+    console.log("Resultados del cálculo:", {
+        diurnal: diurnalHours,
+        night: nightHours,
+        sunday: sundayHours,
+        holiday: holidayHours
+    });
+
     // Actualizar la UI con los resultados
     updateHoursDisplay({
         diurnal: diurnalHours,
@@ -226,31 +241,24 @@ function updateHoursDisplay(hours) {
 }
 
 function showLoading(show) {
-    const loadingElement = document.querySelector('.loading');
-    if (show) {
-        loadingElement?.classList.add('visible');
-    } else {
-        loadingElement?.classList.remove('visible');
-    }
+    Array.from(document.getElementsByClassName('hours-value')).forEach(el => {
+        el.textContent = show ? 'Calculando...' : '0.00';
+    });
 }
 
 function clearAll() {
-    // Limpiar la imagen capturada
     const capturedImage = document.getElementById('captured-image');
     capturedImage.style.display = 'none';
     capturedImage.src = '';
     capturedImage.classList.remove('visible');
     
-    // Limpiar la cámara
     const camera = document.getElementById('camera');
     camera.style.display = 'none';
     
-    // Detener el stream si existe
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
     }
     
-    // Resetear los contadores
     updateHoursDisplay({
         diurnal: 0,
         night: 0,
@@ -259,7 +267,6 @@ function clearAll() {
         total: 0
     });
     
-    // Resetear el botón de la cámara
     const cameraBtn = document.querySelector('.camera-btn');
     cameraBtn.textContent = 'Escanear';
     cameraBtn.onclick = startCamera;
