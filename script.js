@@ -64,36 +64,25 @@ async function captureImage() {
 async function processImage(canvas) {
     try {
         showLoading(true);
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-        const formData = new FormData();
-        formData.append('image', blob);
         
-        console.log("Subiendo imagen...");
-        const uploadResponse = await fetch('https://api.imgbb.com/1/upload?key=52caeb3987a1d3e1407627928b18c14e', {
-            method: 'POST',
-            body: formData
-        });
+        // Convertir el canvas a base64
+        const base64Image = canvas.toDataURL('image/jpeg').split(',')[1];
         
-        const uploadResult = await uploadResponse.json();
-        if (!uploadResult.success) {
-            throw new Error('Error al subir la imagen');
-        }
+        console.log("Enviando imagen a Gemini Vision...");
 
-        const imageUrl = uploadResult.data.url;
-        console.log("Imagen subida:", imageUrl);
-        console.log("Enviando a Gemini...");
-
-        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyCa362tZsWj38073XyGaMTmKC0YKc-W0I8`;
+        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key=AIzaSyCa362tZsWj38073XyGaMTmKC0YKc-W0I8`;
         
         const prompt = {
             "contents": [{
-                "parts": [{
-                    "text": `Analiza esta imagen de un horario laboral y calcula:
+                "parts": [
+                    {"text": `En esta imagen de turnos laborales:
 
-                    1. Horas diurnas (8:00 AM a 10:00 PM)
-                    2. Horas nocturnas (10:00 PM a 8:00 AM)
-                    3. Horas trabajadas en domingos
-                    4. Horas trabajadas en festivos 
+                    1. Identifica cada turno con su fecha y horario
+                    2. Calcula las horas según:
+                       - Diurnas (8:00 AM a 10:00 PM)
+                       - Nocturnas (10:00 PM a 8:00 AM)
+                       - Domingos (todo el día)
+                       - Festivos (todo el día)
                     
                     Festivos en Barcelona 2024:
                     - 1 y 6 de enero
@@ -106,18 +95,22 @@ async function processImage(canvas) {
                     - 1 de noviembre
                     - 6, 25 y 26 de diciembre
 
-                    Devuelve SOLO un JSON con este formato:
+                    Responde SOLO con un JSON así:
                     {
                         "diurnal": 0.0,
                         "night": 0.0,
                         "sunday": 0.0,
                         "holiday": 0.0
                     }
-
-                    La imagen está en: ${imageUrl}
                     
-                    Solo necesito el JSON, sin explicaciones adicionales.`
-                }]
+                    Sin explicaciones adicionales, solo el JSON.`},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64Image
+                        }
+                    }
+                ]
             }]
         };
 
@@ -133,16 +126,28 @@ async function processImage(canvas) {
         console.log("Respuesta de Gemini:", geminiResult);
         
         if (geminiResult.candidates && geminiResult.candidates[0]) {
-            const hoursData = JSON.parse(geminiResult.candidates[0].content.parts[0].text);
-            console.log("Horas calculadas:", hoursData);
-            
-            updateHoursDisplay({
-                diurnal: hoursData.diurnal,
-                night: hoursData.night,
-                sunday: hoursData.sunday,
-                holiday: hoursData.holiday,
-                total: hoursData.diurnal + hoursData.night + hoursData.sunday + hoursData.holiday
-            });
+            try {
+                const responseText = geminiResult.candidates[0].content.parts[0].text;
+                // Buscar el JSON en la respuesta
+                const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const hoursData = JSON.parse(jsonMatch[0]);
+                    console.log("Horas calculadas:", hoursData);
+                    
+                    updateHoursDisplay({
+                        diurnal: hoursData.diurnal,
+                        night: hoursData.night,
+                        sunday: hoursData.sunday,
+                        holiday: hoursData.holiday,
+                        total: hoursData.diurnal + hoursData.night + hoursData.sunday + hoursData.holiday
+                    });
+                } else {
+                    throw new Error('No se encontró formato JSON válido en la respuesta');
+                }
+            } catch (parseError) {
+                console.error('Error al parsear respuesta:', parseError);
+                throw new Error('Error al procesar la respuesta de Gemini');
+            }
         } else {
             throw new Error('No se pudieron calcular las horas');
         }
