@@ -7,24 +7,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
 let stream = null;
 
-// Días festivos en Barcelona 2024
-const festivos2024 = [
-    "2024-01-01", // Año Nuevo
-    "2024-01-06", // Reyes
-    "2024-03-29", // Viernes Santo
-    "2024-04-01", // Lunes de Pascua
-    "2024-05-01", // Día del Trabajo
-    "2024-06-24", // San Juan
-    "2024-08-15", // Asunción
-    "2024-09-11", // Diada
-    "2024-09-24", // La Mercè
-    "2024-10-12", // Hispanidad
-    "2024-11-01", // Todos los Santos
-    "2024-12-06", // Constitución
-    "2024-12-25", // Navidad
-    "2024-12-26"  // San Esteban
-];
-
 async function startCamera() {
     try {
         let camera = document.getElementById('camera');
@@ -98,41 +80,47 @@ async function processImage(canvas) {
         }
 
         const imageUrl = uploadResult.data.url;
-        console.log("Imagen subida, procesando OCR...");
-        
-        const ocrUrl = `https://api.ocr.space/parse/imageurl?apikey=helloworld&url=${encodeURIComponent(imageUrl)}&OCREngine=2`;
-        const ocrResponse = await fetch(ocrUrl);
-        const ocrResult = await ocrResponse.json();
-        
-        if (!ocrResult.ParsedResults || ocrResult.ParsedResults.length === 0) {
-            throw new Error('OCR no pudo extraer texto de la imagen');
-        }
-
-        const text = ocrResult.ParsedResults[0].ParsedText;
-        console.log("Texto extraído:", text);
+        console.log("Imagen subida:", imageUrl);
+        console.log("Enviando a Gemini...");
 
         const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyCa362tZsWj38073XyGaMTmKC0YKc-W0I8`;
         
         const prompt = {
             "contents": [{
                 "parts": [{
-                    "text": `Analiza el siguiente horario y extrae las horas trabajadas. El formato es dd Mes HH:mm-HH:mm. 
-                    Devuelve solo un JSON con este formato exacto:
+                    "text": `Analiza esta imagen de un horario laboral y calcula:
+
+                    1. Horas diurnas (8:00 AM a 10:00 PM)
+                    2. Horas nocturnas (10:00 PM a 8:00 AM)
+                    3. Horas trabajadas en domingos
+                    4. Horas trabajadas en festivos 
+                    
+                    Festivos en Barcelona 2024:
+                    - 1 y 6 de enero
+                    - 29 de marzo y 1 de abril
+                    - 1 de mayo
+                    - 24 de junio
+                    - 15 de agosto
+                    - 11 y 24 de septiembre
+                    - 12 de octubre
+                    - 1 de noviembre
+                    - 6, 25 y 26 de diciembre
+
+                    Devuelve SOLO un JSON con este formato:
                     {
-                        "shifts": [
-                            {
-                                "date": "2024-MM-DD",
-                                "start": "HH:mm",
-                                "end": "HH:mm"
-                            }
-                        ]
+                        "diurnal": 0.0,
+                        "night": 0.0,
+                        "sunday": 0.0,
+                        "holiday": 0.0
                     }
-                    El texto a analizar es:\n${text}`
+
+                    La imagen está en: ${imageUrl}
+                    
+                    Solo necesito el JSON, sin explicaciones adicionales.`
                 }]
             }]
         };
 
-        console.log("Enviando a Gemini...");
         const geminiResponse = await fetch(GEMINI_URL, {
             method: 'POST',
             headers: {
@@ -145,10 +133,18 @@ async function processImage(canvas) {
         console.log("Respuesta de Gemini:", geminiResult);
         
         if (geminiResult.candidates && geminiResult.candidates[0]) {
-            const shiftsData = JSON.parse(geminiResult.candidates[0].content.parts[0].text);
-            calculateHours(shiftsData.shifts);
+            const hoursData = JSON.parse(geminiResult.candidates[0].content.parts[0].text);
+            console.log("Horas calculadas:", hoursData);
+            
+            updateHoursDisplay({
+                diurnal: hoursData.diurnal,
+                night: hoursData.night,
+                sunday: hoursData.sunday,
+                holiday: hoursData.holiday,
+                total: hoursData.diurnal + hoursData.night + hoursData.sunday + hoursData.holiday
+            });
         } else {
-            throw new Error('No se pudo procesar el horario');
+            throw new Error('No se pudieron calcular las horas');
         }
 
     } catch (error) {
@@ -157,79 +153,6 @@ async function processImage(canvas) {
     } finally {
         showLoading(false);
     }
-}
-
-function calculateHours(shifts) {
-    let diurnalHours = 0;
-    let nightHours = 0;
-    let sundayHours = 0;
-    let holidayHours = 0;
-    
-    console.log("Calculando horas para turnos:", shifts);
-
-    shifts.forEach(shift => {
-        const date = new Date(shift.date);
-        const [startHour, startMinute] = shift.start.split(':').map(Number);
-        const [endHour, endMinute] = shift.end.split(':').map(Number);
-        
-        // Convertir a minutos para facilitar el cálculo
-        let startTime = startHour * 60 + startMinute;
-        let endTime = endHour * 60 + endMinute;
-        
-        // Si la hora final es menor que la inicial, significa que cruza la medianoche
-        if (endTime < startTime) {
-            endTime += 24 * 60; // Agregar 24 horas en minutos
-        }
-        
-        // Calcular duración total del turno en minutos
-        const totalMinutes = endTime - startTime;
-        
-        // Verificar si es domingo
-        if (date.getDay() === 0) {
-            sundayHours += totalMinutes / 60;
-            return; // No contar las demás categorías si es domingo
-        }
-        
-        // Verificar si es festivo
-        const dateString = date.toISOString().split('T')[0];
-        if (festivos2024.includes(dateString)) {
-            holidayHours += totalMinutes / 60;
-            return; // No contar las demás categorías si es festivo
-        }
-        
-        // Dividir entre horas diurnas y nocturnas
-        let currentTime = startTime;
-        while (currentTime < endTime) {
-            const hour = Math.floor((currentTime % (24 * 60)) / 60);
-            
-            // Contar minutos en el intervalo actual
-            const minutesToAdd = Math.min(60 - (currentTime % 60), endTime - currentTime);
-            
-            if (hour >= 8 && hour < 22) {
-                diurnalHours += minutesToAdd / 60;
-            } else {
-                nightHours += minutesToAdd / 60;
-            }
-            
-            currentTime += minutesToAdd;
-        }
-    });
-    
-    console.log("Resultados del cálculo:", {
-        diurnal: diurnalHours,
-        night: nightHours,
-        sunday: sundayHours,
-        holiday: holidayHours
-    });
-
-    // Actualizar la UI con los resultados
-    updateHoursDisplay({
-        diurnal: diurnalHours,
-        night: nightHours,
-        sunday: sundayHours,
-        holiday: holidayHours,
-        total: diurnalHours + nightHours + sundayHours + holidayHours
-    });
 }
 
 function updateHoursDisplay(hours) {
